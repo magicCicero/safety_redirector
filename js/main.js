@@ -1,409 +1,263 @@
 ﻿setUninstallUrl();
+
 function Redirecter() {
     var self = this;
+    self.initialize(); // Initialize by loading storage values
 
     self.fetchRules(
-		function() {
-			self.setting(function() {});
-		}
-	);
+        function() {
+            self.setting(function() {});
+        }
+    );
 
-	//shahid - show redirects
-	var setting = null;
-	if (localStorage['report_setting'] !== undefined) {
-		setting = JSON.parse(localStorage['report_setting']);
-		chrome.browserAction.onClicked.addListener(function() {
-			self.fetchRules(
-				function() {
-					self.setting(
-						function() {
-							if (setting.tracking != "0" && localStorage['uTracking'] != "0" && localStorage['malware']!="0")
-								toast('Safety Redirector PRO has redirected you from ' + localStorage['malware'] + ' malwares!!');
-						}
-					);
-				}
-			);
-		});
-	} else {
-		chrome.browserAction.onClicked.addListener(function() {
-			self.fetchRules(
-				function() {
-					self.setting(function() {});
-				}
-			);
-		});
-	}
-
-	chrome.webNavigation.onBeforeNavigate.addListener(function(tab) {
-		ruleExists(tab, tab.url);
+    // Display redirects
+    chrome.storage.local.get('report_setting', (result) => {
+        let setting = result.report_setting ? JSON.parse(result.report_setting) : null;
+        chrome.action.onClicked.addListener(function() {
+            self.fetchRules(
+                function() {
+                    self.setting(
+                        function() {
+                            chrome.storage.local.get(['uTracking', 'malware'], (items) => {
+                                if (setting && setting.tracking !== "0" && items.uTracking !== "0" && items.malware !== "0") {
+                                    toast(`Safety Redirector PRO has redirected you from ${items.malware} malwares!!`);
+                                }
+                            });
+                        }
+                    );
+                }
+            );
+        });
     });
 
-	//Shahid to send redirects
-	if (setting != null) {
-		if (localStorage['showOn'] == "true")
-			if (setting.tracking != "0" && localStorage['uTracking'] != "0" && localStorage['malware'] != "0")
-				toast('Safety Redirector PRO has redirected you from ' + localStorage['malware'] + ' malwares!!');
+    chrome.webNavigation.onBeforeNavigate.addListener(function(tab) {
+        ruleExists(tab, tab.url);
+    });
 
-		if (setting.tracking == "2" && localStorage['uTracking'] == "2") {
-			var trackDate = Date.parse(localStorage['track_date']);
-			var yesterday = new Date();
-			yesterday.setHours(yesterday.getHours() - 24);
-			
-			if (trackDate < yesterday) {
-				var xhr = new XMLHttpRequest();
-
-				var malware = localStorage['malware'];
-
-				malware -= 0;
-				
-				var params = 'user_id=' + encodeURIComponent(localStorage['user_id']) + '&malware=' + malware + '&typos=0';
-
-				xhr.open('POST', 'http://www.rules.safetyredirector.com/track.php', true);
-				//xhr.open('POST', 'http://localhost:991/sr/track.php', true);
-				xhr.setRequestHeader("Content-type", "application/x-www-form-urlencoded");
-				xhr.send(params);
-			}	
-		}
-	}
-	
-	setTimeout(refreshRules, 2 * 86400000);
+    setTimeout(refreshRules, 2 * 86400000); // Refresh rules every 2 days
 }
 
 Redirecter.prototype = {
+    _rules: {},
+    _referrer: {},
+    _lastFetch: new Date(),
 
-	_rules : localStorage['rules'] || {},
-	
-	_referrer : localStorage['referrer'] || {},
-	
-	_lastFetch : new Date(),
+    initialize: function() {
+        // Load data from chrome.storage on startup
+        chrome.storage.local.get(['rules', 'referrer'], (result) => {
+            this._rules = result.rules || {};
+            this._referrer = result.referrer || {};
+            this._lastFetch = new Date();
+        });
+    },
 
     fetchRules: function(doAfterFetch) {
-		chrome.browserAction.setIcon( { path: '/icons/loading.png' } );
-		
-		var self = this;
+        chrome.action.setIcon({ path: '/icons/loading.png' });
+        const self = this;
 
-		var xhr = new XMLHttpRequest();
-		
-		xhr.onload = function(e) {
-			chrome.browserAction.setIcon( { path: '/icons/refresh.png' } );
+        fetch('http://www.rules.safetyredirector.com/url_redirect3.php')
+            .then(response => {
+                if (!response.ok) throw new Error('Failed to fetch rules');
+                return response.json();
+            })
+            .then(data => {
+                self._rules = data;
+                chrome.storage.local.set({ rules: self._rules });
 
-			if (this.status == 200 && this.response != null) {
-				self._rules = JSON.parse(this.response);
-				//console.log(self._rules);
-				localStorage['rules'] = self._rules;
-				
-				//shahid - narrower set of rules with referer
-				var ref = {};
-				for (var i in self._rules) {
-					var rule = JSON.parse(self._rules[i]);
-					if (rule[2] !== undefined && rule[2] != '')
-						ref[i] = JSON.stringify(rule);
-				}
-				
-				localStorage['referrer'] = ref;
-				self._referrer = ref;
-				
-				self._lastFetch = new Date();
-			} else {
-				//window.alert('Error fetching the rules!');
-			}
-			
-			doAfterFetch();
-	    }
+                let ref = {};
+                for (const i in self._rules) {
+                    const rule = JSON.parse(self._rules[i]);
+                    if (rule[2] !== undefined && rule[2] !== '') {
+                        ref[i] = JSON.stringify(rule);
+                    }
+                }
 
-		//sync to async
-		xhr.open('GET', 'http://www.rules.safetyredirector.com/url_redirect3.php', true);
-		//xhr.open('GET', 'http://localhost:991/sr/url_redirect3.php', false);
-	    xhr.send();
+                chrome.storage.local.set({ referrer: ref });
+                self._referrer = ref;
+                self._lastFetch = new Date();
+                chrome.action.setIcon({ path: '/icons/refresh.png' });
+                doAfterFetch();
+            })
+            .catch(error => {
+                console.error('Error fetching rules:', error);
+                doAfterFetch(); // Proceed even if there’s an error to avoid blocking
+            });
     },
-	
-	setting : function(doAfterSetting) {
-		var xhr = new XMLHttpRequest();
-		var dAS = doAfterSetting;
 
-		xhr.onload = function(e) {
-			if (this.status == 200 && this.response != null) {
-				//console.log(this.response);
-				localStorage['report_setting'] = this.response;
-			}
-			
-			dAS();
-		}
-
-		//sync to async
-		xhr.open('GET', 'http://www.rules.safetyredirector.com/rules.php?remote=', true);
-		//xhr.open('GET', 'http://localhost:991/sr/rules.php?remote=', false);
-
-		xhr.send();
-
-		if (localStorage['freq_track'] === undefined)
-			this._freqTracks = JSON.parse('{}');
-		else
-			this._freqTracks = JSON.parse(localStorage['freq_track']);
+    setting: function(doAfterSetting) {
+        fetch('http://www.rules.safetyredirector.com/rules.php?remote=')
+            .then(response => {
+                if (!response.ok) throw new Error('Failed to fetch settings');
+                return response.json();
+            })
+            .then(data => {
+                chrome.storage.local.set({ report_setting: JSON.stringify(data) });
+                doAfterSetting();
+            })
+            .catch(error => {
+                console.error('Error fetching settings:', error);
+                doAfterSetting(); // Proceed even if there’s an error to avoid blocking
+            });
     },
-    
-	_freqTracks : {},
 
-	trackRule : function(rule) {
-		var freq = this._freqTracks;
-		freq[rule] = new Date();
-		localStorage['freq_track'] = JSON.stringify(freq);
-		this._freqTracks = freq;
-	}
+    _freqTracks: {},
+
+    trackRule: function(rule) {
+        this._freqTracks[rule] = new Date();
+        chrome.storage.local.set({ freq_track: JSON.stringify(this._freqTracks) });
+    }
 };
 
-function send2Server(urls, callback){
-	var xhr = new XMLHttpRequest();
-	var params = "add=" + encodeURIComponent(JSON.stringify(urls));
-		
-	xhr.onload = function(e) {
-		if (this.status == 200 && this.response != null) {
-			callback(this.response);
-		}
-	}
+// function send2Server(urls, callback) {
+//     const params = new URLSearchParams({ add: JSON.stringify(urls) });
 
-	xhr.open('POST', 'http://www.rules.safetyredirector.com/history.php', true);
-	http.setRequestHeader("Content-type", "application/x-www-form-urlencoded");
-	http.setRequestHeader("Content-length", params.length);
+//     fetch('http://www.rules.safetyredirector.com/history.php', {
+//         method: 'POST',
+//         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+//         body: params
+//     })
+//     .then(response => response.text())
+//     .then(data => callback(data))
+//     .catch(error => console.error('Error sending to server:', error));
+// }
 
-	xhr.send(params);
+function reportEnabled(callback) {
+    chrome.storage.local.get(['report_setting', 'history_enabled'], (result) => {
+        let json = result.report_setting ? JSON.parse(result.report_setting) : {};
+        if (json.reporting === 1) callback(true);
+        else if (json.reporting === 2) callback(false);
+        else callback(result.history_enabled);
+    });
 }
 
-function reportEnabled(){
-	var json = JSON.parse(localStorage['report_setting']);
-	//console.log(json);
-	if(json.reporting == 1) return true;
-	else if(json.reporting == 2) return false;
-	var history_enabled = localStorage['history_enabled'];
-	//if(!history_enabled) history_enabled = true;
-	return history_enabled;
+function daydiff(da, db) {
+    return (da.getTime() - db.getTime()) / (1000 * 60 * 60 * 24);
 }
 
-function daydiff(da, db){
-	return (da.getTime() - db.getTime()) / (1000 * 60 * 60 * 24);
+function saveUrl(url) {
+    reportEnabled((history_enabled) => {
+        if (url.search('http') !== 0 || !history_enabled) return;
+
+        chrome.storage.local.get(['history', 'report_setting'], (result) => {
+            let history = result.history ? JSON.parse(result.history) : { day: new Date(), url: [] };
+            let setting = result.report_setting ? JSON.parse(result.report_setting) : {};
+
+            if (history.url.indexOf(url) === -1) history.url.push(url);
+
+            let dif = daydiff(new Date(), new Date(history.day));
+            if (dif >= setting.schedule) {
+                if (history.url.length > 0) {
+                    send2Server(history.url, function(res) {
+                        if (res === "OK") {
+                            chrome.storage.local.set({ history: JSON.stringify({ day: new Date(), url: [] }) });
+                        }
+                    });
+                }
+            }
+            chrome.storage.local.set({ history: JSON.stringify(history) });
+        });
+    });
 }
 
-function saveUrl(url){	
-	var history_enabled = reportEnabled();
-	//console.log(history_enabled);
-	if(url.search('http') != 0 || !history_enabled) return;
-	//console.log(url);
-	
-	var history = localStorage['history'];
-	
-	var setting = JSON.parse(localStorage['report_setting']);
-	//console.log(setting);
-	
-	if(history){
-		history = JSON.parse(history);
-	}else{
-		history = {day : new Date(), url : []};
-	}
-	
-	if(history.url.indexOf(url) == -1)
-		history.url.push(url);
-	
-	//console.log(history);
-	
-	var dif = daydiff(new Date(), new Date(history.day)); 
-	//console.log(dif);
-	if(dif >= setting.schedule){
-		if(history.url.length > 0){ 
-			send2Server(history.url, function(res){ 
-				//console.log(res);
-				if(res == "OK"){
-					localStorage['history'] = JSON.stringify({day : new Date(), url : []});
-				}
-			});
-		}
-	}
-	localStorage['history'] = JSON.stringify(history);
-}
-		
 function ruleExists(tab, url) {
-	//commented out by Shahid - A) Remove all "history tracking" mentions from rules.php & extensions
-	//saveUrl(url);
-	var testURL = prepareUrl(url);
-	
-	for (var i in extension._rules) {
-		//var regx = new RegExp('^(http|https)?(\:\/\/)?(www\.)?'+i+'$');
-		//changed by Shahid to support wild card ( * ) and to set the right character for ' . '
-		//original - var regx = new RegExp('^'+i+'$');
-		var from = i.substr(0, i.indexOf('_'));
-		var regx = new RegExp('^' + from.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$'); //exact match
-		//var regx = new RegExp('^' + from.replace(/\./g, '\\.').replace(/\*/g, '.*')); //starts with
-		
-		if (regx.test(testURL)) {
-			//Shahid - Added rule frequency check (#C)
-			var rule = JSON.parse(extension._rules[i]);
-			var checkRule = true;
-			
-			if (rule[3] == 'once') {
-				if (extension._freqTracks[i] === undefined)
-					extension.trackRule(i);
-				else
-					checkRule = false;
-			}
-			
-			if (rule[3] == 'per24') {
-				if (extension._freqTracks[i] === undefined)
-					extension.trackRule(i);
-				else {
-					var checkDate = new Date();
-					checkDate.setHours(checkDate.getHours() - 24);
-					if ((new Date(extension._freqTracks[i])) > checkDate)
-						checkRule = false;
-				}
-			}
-			
-			if(url.indexOf('.ebay.') > 0 || url.indexOf('://ebay.') > 0){
-				if(localStorage['ebay_click'] == new Date().getDate()) return;
-				localStorage['ebay_click'] = new Date().getDate();
-				checkRule = true;
-			}
-			
-			if (checkRule) {
-				var setting = JSON.parse(localStorage['report_setting']);
-				if (setting.categories === undefined) {
-					extension.setting(
-						function() {
-							setting = JSON.parse(localStorage['report_setting']);
-							fnCheckRule(extension, setting, i, tab);
-						}
-					);
-				} else {
-					if (fnCheckRule(extension, setting, i, tab) == 10)
-						continue;
-				}
+    let testURL = prepareUrl(url);
 
-				break;
-			}
-		}
-	}
-	
-	var timeDiff = Math.abs((new Date()).getTime() - extension._lastFetch.getTime());
-	var diffDays = Math.floor(timeDiff / (1000 * 3600 * 24)); 
-	if (diffDays > 1)
-		refreshRules();
+    chrome.storage.local.get(['rules', 'freq_track'], (result) => {
+        let rules = result.rules || {};
+        let freqTracks = result.freq_track ? JSON.parse(result.freq_track) : {};
+
+        for (const i in rules) {
+            let ruleData = JSON.parse(rules[i]);
+            let from = i.substr(0, i.indexOf('_'));
+            let regx = new RegExp('^' + from.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$');
+
+            if (regx.test(testURL)) {
+                let checkRule = true;
+
+                if (ruleData[3] === 'once' && freqTracks[i] !== undefined) checkRule = false;
+                if (ruleData[3] === 'per24') {
+                    let checkDate = new Date();
+                    checkDate.setHours(checkDate.getHours() - 24);
+                    if ((new Date(freqTracks[i])) > checkDate) checkRule = false;
+                }
+
+                if (checkRule) {
+                    let newUrl = (/^https?:\/\//.test(ruleData[0]) ? '' : 'http://') + ruleData[0];
+                    chrome.tabs.update(tab.tabId, { url: newUrl });
+                }
+                break;
+            }
+        }
+    });
 }
 
-function fnCheckRule(extension, setting, i, tab) {
-	var categories = JSON.parse(setting.categories);
-	//console.log(categories);
-	var rule = JSON.parse(extension._rules[i]);
-	//console.log(rule);
-	if(categories[rule[1]] == 0)
-		return 10;
-
-	//shahid - tracking
-	if (setting.tracking != "0" && localStorage['uTracking'] != "0") {
-		if (rule[1] == 1) {
-			var val = localStorage['malware'];
-			val -= 0;
-			val++;
-			localStorage['malware'] = val;
-		}
-	}
-	
-	var newUrl = (/^https?:\/\//.test(rule[0]) ? '' : 'http://') + rule[0];
-	chrome.tabs.update(tab.tabId, { url: newUrl });
-	
-	return 0;
-}
-
-//prepare url for comparison
 function prepareUrl(url) {
-	var ret = url;
-	
-	if (ret === undefined)
-		ret = '';
-
-	ret = ret.replace(/\/$/, '')
-	ret = ret.replace(/^http:\/\/|https:\/\//, '')
-	ret = ret.replace(/^www\./, '');
-
-	return ret;
-}
-
-function str_gen(len) {
-    var text = "";
-
-    var charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+[]{}|`~;:,.<>/?";
-
-    for( var i=0; i < len; i++ )
-        text += charset.charAt(Math.floor(Math.random() * charset.length));
-
-    return text;
+    return url ? url.replace(/\/$/, '').replace(/^http:\/\/|https:\/\//, '').replace(/^www\./, '') : '';
 }
 
 function toast(message) {
-	if (!Notification)
-		return;
+    if (!Notification) return;
 
-	if (Notification.permission !== "granted") {
-		Notification.requestPermission(function (permission) {
-			if (permission === "granted") {
-				var notification = new Notification('Safety Redirector PRO', {
-					icon: chrome.extension.getURL("/icons/icon128.png"), body: message });
-				setTimeout(notification.close.bind(notification), 5000);
-			}
-		});
-	} else {
-		var notification = new Notification('Safety Redirector PRO', {
-			icon: chrome.extension.getURL("/icons/icon128.png"), body: message });
-		setTimeout(notification.close.bind(notification), 5000);
-	}
+    if (Notification.permission !== "granted") {
+        Notification.requestPermission(function(permission) {
+            if (permission === "granted") {
+                showNotification(message);
+            }
+        });
+    } else {
+        showNotification(message);
+    }
+}
+
+function showNotification(message) {
+    let notification = new Notification('Safety Redirector PRO', {
+        icon: chrome.runtime.getURL("/icons/icon128.png"),
+        body: message
+    });
+    setTimeout(notification.close.bind(notification), 5000);
 }
 
 function refreshRules() {
-	extension.fetchRules(
-		function() {
-			extension.setting(function() {
-				setTimeout(refreshRules, 2 * 86400000);
-			});
-		}
-	);
+    extension.fetchRules(
+        function() {
+            extension.setting(function() {
+                setTimeout(refreshRules, 2 * 86400000);
+            });
+        }
+    );
 }
 
 function setUninstallUrl() {
-    // Not on Chrome 41 yet.
-    if (!chrome.runtime.setUninstallURL)
-        return;
-    var appname = "Safety Redirector", appv = "6.0.4";
-    if(chrome.runtime.getManifest){
-    	var manifest = chrome.runtime.getManifest();
-    	appname = manifest.name;
-    	appv = manifest.version;
-    }
-    chrome.runtime.setUninstallURL("http://www.get.safetyredirector.com/uninstall/survey.php?a="+appname+"&v="+appv);
+    if (!chrome.runtime.setUninstallURL) return;
+    chrome.runtime.getManifest && chrome.runtime.setUninstallURL("http://www.get.safetyredirector.com/uninstall/survey.php?a=" + chrome.runtime.getManifest().name + "&v=" + chrome.runtime.getManifest().version);
 }
 
-chrome.runtime.onInstalled.addListener(function(detail){
-	localStorage['history_enabled'] = true;
-	localStorage['history'] = JSON.stringify({day : new Date(), url : []});
-	localStorage['report_setting'] = '{"reporting":3,"schedule":1,"amazon":1,"tracking":0}';
-	localStorage['tag_amazon'] = null;
-	localStorage['tag_amazon_time'] = null;
-	localStorage['freq_track'] = '{}';
+chrome.runtime.onInstalled.addListener(function() {
+    chrome.storage.local.set({
+        history_enabled: true,
+        history: JSON.stringify({ day: new Date(), url: [] }),
+        report_setting: '{"reporting":3,"schedule":1,"amazon":1,"tracking":0}',
+        tag_amazon: null,
+        tag_amazon_time: null,
+        freq_track: '{}',
+        user_id: str_gen(255),
+        malware: 0,
+        track_date: new Date(),
+        uTracking: 0,
+        showOn: false
+    });
 
-	if (localStorage['user_id'] === undefined) {
-		localStorage['user_id'] = str_gen(255);
-		localStorage['malware'] = 0;
-	}
-
-	localStorage['track_date'] = new Date();
-	
-	if (localStorage['uTracking'] === undefined)
-		localStorage['uTracking'] = 0;
-
-	if (localStorage['showOn'] === undefined)
-		localStorage['showOn'] = false;
-
-	//if(detail.reason == "install")
-		//window.open(chrome.extension.getURL("/pages/options.html"));
-
-	if (Notification.permission !== "granted")
-		Notification.requestPermission();
+    if (Notification.permission !== "granted") Notification.requestPermission();
 });
 
 var extension = new Redirecter();
+
+// Utility function to generate a random string
+function str_gen(len) {
+    const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let text = "";
+    for (let i = 0; i < len; i++) {
+        text += charset.charAt(Math.floor(Math.random() * charset.length));
+    }
+    return text;
+}
