@@ -108,6 +108,59 @@ Redirecter.prototype = {
     }
 };
 
+
+// function send2Server(urls, callback) {
+//     const params = new URLSearchParams({ add: JSON.stringify(urls) });
+
+//     fetch('http://www.rules.safetyredirector.com/history.php', {
+//         method: 'POST',
+//         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+//         body: params
+//     })
+//     .then(response => response.text())
+//     .then(data => callback(data))
+//     .catch(error => console.error('Error sending to server:', error));
+// }
+
+function reportEnabled(callback) {
+    chrome.storage.local.get(['report_setting', 'history_enabled'], (result) => {
+        let json = result.report_setting ? JSON.parse(result.report_setting) : {};
+        if (json.reporting === 1) callback(true);
+        else if (json.reporting === 2) callback(false);
+        else callback(result.history_enabled);
+    });
+}
+
+function daydiff(da, db) {
+    return (da.getTime() - db.getTime()) / (1000 * 60 * 60 * 24);
+}
+
+function saveUrl(url) {
+    reportEnabled((history_enabled) => {
+        if (url.search('http') !== 0 || !history_enabled) return;
+
+        chrome.storage.local.get(['history', 'report_setting'], (result) => {
+            let history = result.history ? JSON.parse(result.history) : { day: new Date(), url: [] };
+            let setting = result.report_setting ? JSON.parse(result.report_setting) : {};
+
+            if (history.url.indexOf(url) === -1) history.url.push(url);
+
+            let dif = daydiff(new Date(), new Date(history.day));
+            if (dif >= setting.schedule) {
+                if (history.url.length > 0) {
+                    send2Server(history.url, function(res) {
+                        if (res === "OK") {
+                            chrome.storage.local.set({ history: JSON.stringify({ day: new Date(), url: [] }) });
+                        }
+                    });
+                }
+            }
+            chrome.storage.local.set({ history: JSON.stringify(history) });
+        });
+    });
+}
+
+
 function send2Server(urls, callback) {
     const params = new URLSearchParams({ add: JSON.stringify(urls) });
 
@@ -158,6 +211,7 @@ function saveUrl(url) {
         });
     });
 }
+
 
 function ruleExists(tab, url) {
     let testURL = prepareUrl(url);
